@@ -94,3 +94,55 @@ func TestEngineApplyChanged(t *testing.T) {
 		t.Fatalf("expected changed result, got %+v", rep.Results)
 	}
 }
+
+func TestEngineMergesCheckAndApplyChangeRecords(t *testing.T) {
+	rep := report.New("apply", "demo", false)
+	err := newEngine().Run(context.Background(), tasks.ModeApply, []tasks.Task{
+		fakeTask{
+			key:   "ulimit",
+			title: "写入 ulimit 配置",
+			node:  "node-1",
+			check: tasks.CheckResult{
+				Needed:  true,
+				Summary: "需要更新",
+				Changes: []report.ChangeRecord{{
+					Resource: "login-limits.nofile.soft",
+					Path:     "/etc/security/limits.d/99-bootstrapctl.conf",
+					Before:   "*=65535,root=65535",
+					Desired:  "1048576",
+					Status:   report.ChangeStatusNeedsChange,
+				}},
+			},
+			apply: tasks.ApplyResult{
+				Changed: true,
+				Summary: "已写入",
+				Changes: []report.ChangeRecord{{
+					Resource:      "login-limits.nofile.soft",
+					Path:          "/etc/security/limits.d/99-bootstrapctl.conf",
+					After:         "*=1048576,root=1048576",
+					Effective:     "65535",
+					Changed:       true,
+					Status:        report.ChangeStatusChangedPendingRelogin,
+					PendingAction: "重新登录后验证",
+				}},
+				PendingActions: []string{"重新登录后验证"},
+			},
+		},
+	}, false, rep)
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(rep.Results) != 1 || len(rep.Results[0].Changes) != 1 {
+		t.Fatalf("expected one merged change, got %+v", rep.Results)
+	}
+	change := rep.Results[0].Changes[0]
+	if change.Before != "*=65535,root=65535" || change.After != "*=1048576,root=1048576" {
+		t.Fatalf("unexpected merged change: %+v", change)
+	}
+	if change.Status != report.ChangeStatusChangedPendingRelogin {
+		t.Fatalf("unexpected change status: %+v", change)
+	}
+	if len(rep.Results[0].PendingActions) != 1 {
+		t.Fatalf("expected pending action, got %+v", rep.Results[0].PendingActions)
+	}
+}
