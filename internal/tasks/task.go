@@ -9,6 +9,7 @@ import (
 
 	"github.com/yuanyp8/bootstrapctl/internal/config"
 	"github.com/yuanyp8/bootstrapctl/internal/remote"
+	"github.com/yuanyp8/bootstrapctl/internal/report"
 )
 
 // Mode 表示任务执行模式。
@@ -22,8 +23,10 @@ const (
 
 // Task 是 bootstrapctl 的最小执行单元。
 // 每个任务都必须具备：
-// 1. Check：判断是否存在漂移
-// 2. Apply：真正落变更
+// 1. Check：判断是否存在漂移，并尽量记录 before/desired/effective
+// 2. Apply：真正落变更，并记录 after/effective/verified
+//
+// 旧任务可以继续只返回 Summary；新任务应逐步补齐 Changes。
 type Task interface {
 	Key() string
 	Title() string
@@ -33,24 +36,30 @@ type Task interface {
 }
 
 type CheckResult struct {
-	Needed  bool
-	Summary string
+	Needed         bool
+	Summary        string
+	Changes        []report.ChangeRecord
+	Warnings       []string
+	PendingActions []string
 }
 
 type ApplyResult struct {
-	Changed bool
-	Summary string
+	Changed        bool
+	Summary        string
+	Changes        []report.ChangeRecord
+	Warnings       []string
+	PendingActions []string
 }
 
 // Build 根据 inventory 与 profile 展开完整任务列表。
 // 当前执行顺序是有意编排的：
-// - 先做 SSH 连通性
-// - 再做主机名 / hosts
+// - 先做 SSH 连通性和主机事实采集
+// - 再做 SSH、账号、主机名和 hosts
 // - 再做 swap / SELinux / 防火墙 / 内核网络
-// - 最后做目录与资源限制
+// - 最后做目录、容器运行时存储观测与资源限制
 func Build(inventory config.Inventory, profile config.Profile) []Task {
 	nodes := inventory.ResolveNodes()
-	taskList := make([]Task, 0, len(nodes)*14)
+	taskList := make([]Task, 0, len(nodes)*16)
 	controllerKeyTargets := map[string]struct{}{}
 	controllerSSHConfigTargets := map[string]struct{}{}
 
@@ -58,6 +67,10 @@ func Build(inventory config.Inventory, profile config.Profile) []Task {
 		if profile.Features.SSHConnectivityEnabled() {
 			taskList = append(taskList, &SSHConnectivityTask{NodeSpec: node})
 		}
+		// 其它任务都依赖发行版、init、包管理器、DNS、cgroup 和时间事实。
+		// 即使关闭单独的 connectivity 展示任务，也仍然需要执行 facts 采集。
+		taskList = append(taskList, &HostFactsTask{NodeSpec: node})
+
 		if profile.Features.SSHAuthorizedKeyEnabled() {
 			if node.Bastion != nil && strings.TrimSpace(node.Bastion.Host) != "" {
 				bastionNode := bastionConnectionForNode(node)
@@ -97,8 +110,6 @@ func Build(inventory config.Inventory, profile config.Profile) []Task {
 		}
 		// bastion -> target 的二跳免密与客户端 SSH config，
 		// 语义上属于“节点间互信链路”，不应该被“控制端公钥分发”总开关绑死。
-		// 这样像 master1 -> node1 这类真实集群节点场景，即使不要求控制端免密，
-		// 仍然可以独立收敛跳板机到私网节点的登录体验。
 		if node.Bastion != nil && strings.TrimSpace(node.Bastion.Host) != "" && profile.SSHKey.EnableBastionHopEnabled() {
 			taskList = append(taskList, &SSHBastionHopKeyTask{
 				TargetNodeSpec:  node,
@@ -174,6 +185,15 @@ func Build(inventory config.Inventory, profile config.Profile) []Task {
 				StorageConfPath: profile.Storage.StorageConfPath,
 				RunRoot:         profile.Storage.RunRoot,
 				GraphDriver:     profile.Storage.GraphDriver,
+			})
+			// 先把真实运行时消费的目录纳入报告。当前仅观测，不自动改写
+			// Docker daemon.json 或 containerd config.toml，避免破坏已有配置。
+			taskList = append(taskList, &RuntimeStorageAuditTask{
+				NodeSpec:               node,
+				ExpectedDockerRoot:     profile.Storage.GraphRoot,
+				ExpectedContainerdRoot: profile.Storage.CRIRoot,
+				ExpectedContainersRoot: strings.TrimRight(profile.Storage.GraphRoot, "/") + "/containers/storage",
+				StorageConfPath:        profile.Storage.StorageConfPath,
 			})
 		}
 		if profile.Features.UlimitEnabled() {
