@@ -36,10 +36,10 @@ type Task interface {
 }
 
 type CheckResult struct {
-	Needed        bool
-	Summary       string
-	Changes       []report.ChangeRecord
-	Warnings      []string
+	Needed         bool
+	Summary        string
+	Changes        []report.ChangeRecord
+	Warnings       []string
 	PendingActions []string
 }
 
@@ -53,13 +53,13 @@ type ApplyResult struct {
 
 // Build 根据 inventory 与 profile 展开完整任务列表。
 // 当前执行顺序是有意编排的：
-// - 先做 SSH 连通性
-// - 再做主机名 / hosts
+// - 先做 SSH 连通性和主机事实采集
+// - 再做 SSH、账号、主机名和 hosts
 // - 再做 swap / SELinux / 防火墙 / 内核网络
 // - 最后做目录、容器运行时存储观测与资源限制
 func Build(inventory config.Inventory, profile config.Profile) []Task {
 	nodes := inventory.ResolveNodes()
-	taskList := make([]Task, 0, len(nodes)*15)
+	taskList := make([]Task, 0, len(nodes)*16)
 	controllerKeyTargets := map[string]struct{}{}
 	controllerSSHConfigTargets := map[string]struct{}{}
 
@@ -67,6 +67,10 @@ func Build(inventory config.Inventory, profile config.Profile) []Task {
 		if profile.Features.SSHConnectivityEnabled() {
 			taskList = append(taskList, &SSHConnectivityTask{NodeSpec: node})
 		}
+		// 其它任务都依赖发行版、init、包管理器、DNS、cgroup 和时间事实。
+		// 即使关闭单独的 connectivity 展示任务，也仍然需要执行 facts 采集。
+		taskList = append(taskList, &HostFactsTask{NodeSpec: node})
+
 		if profile.Features.SSHAuthorizedKeyEnabled() {
 			if node.Bastion != nil && strings.TrimSpace(node.Bastion.Host) != "" {
 				bastionNode := bastionConnectionForNode(node)
@@ -185,11 +189,11 @@ func Build(inventory config.Inventory, profile config.Profile) []Task {
 			// 先把真实运行时消费的目录纳入报告。当前仅观测，不自动改写
 			// Docker daemon.json 或 containerd config.toml，避免破坏已有配置。
 			taskList = append(taskList, &RuntimeStorageAuditTask{
-				NodeSpec:              node,
-				ExpectedDockerRoot:    profile.Storage.GraphRoot,
+				NodeSpec:               node,
+				ExpectedDockerRoot:     profile.Storage.GraphRoot,
 				ExpectedContainerdRoot: profile.Storage.CRIRoot,
 				ExpectedContainersRoot: strings.TrimRight(profile.Storage.GraphRoot, "/") + "/containers/storage",
-				StorageConfPath:       profile.Storage.StorageConfPath,
+				StorageConfPath:        profile.Storage.StorageConfPath,
 			})
 		}
 		if profile.Features.UlimitEnabled() {
