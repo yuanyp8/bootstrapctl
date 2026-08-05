@@ -50,6 +50,7 @@ func (r *Report) Finalize() {
 	r.FinishedAt = time.Now()
 }
 
+// SaveJSON 保持原有返回值兼容，同时落一份同 RunID 的 Markdown 交付报告。
 func (r *Report) SaveJSON(reportDir string) (string, error) {
 	r.Finalize()
 	if err := os.MkdirAll(reportDir, 0o755); err != nil {
@@ -63,11 +64,13 @@ func (r *Report) SaveJSON(reportDir string) (string, error) {
 	if err := os.WriteFile(path, content, 0o644); err != nil {
 		return "", fmt.Errorf("写入报告失败: %w", err)
 	}
+	if _, err := r.SaveMarkdown(reportDir); err != nil {
+		return "", fmt.Errorf("JSON 已写入但 Markdown 交付报告生成失败: %w", err)
+	}
 	return path, nil
 }
 
 // SaveMarkdown 输出适合交付审阅的动作报告。
-// 当前 CLI 仍以 JSON 为主；后续会统一由 app 层同时保存 JSON 和 Markdown。
 func (r *Report) SaveMarkdown(reportDir string) (string, error) {
 	if r.FinishedAt.IsZero() {
 		r.Finalize()
