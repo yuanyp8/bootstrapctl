@@ -25,8 +25,8 @@ func TestBuildGeneratesExpectedTasks(t *testing.T) {
 	profile.ApplyDefaults()
 
 	taskList := Build(inventory, profile)
-	if len(taskList) != 24 {
-		t.Fatalf("expected 24 tasks for 2 nodes with 12 tasks each, got %d", len(taskList))
+	if len(taskList) != 26 {
+		t.Fatalf("expected 26 tasks for 2 nodes with 13 tasks each, got %d", len(taskList))
 	}
 }
 
@@ -51,13 +51,14 @@ func TestBuildIncludesSSHAuthorizedKeyTaskWhenEnabled(t *testing.T) {
 	profile.SSHKey.ResolvedPublicKey = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBootstrapCtlExampleKey bootstrapctl@example"
 
 	taskList := Build(inventory, profile)
-	if len(taskList) != 12 {
-		t.Fatalf("expected 12 tasks for 1 node with ssh_authorized_key enabled, got %d", len(taskList))
+	if len(taskList) != 13 {
+		t.Fatalf("expected 13 tasks for 1 node with ssh_authorized_key enabled, got %d", len(taskList))
 	}
 
 	found := false
 	controllerConfigFound := false
 	runtimeStorageAuditFound := false
+	hostFactsFound := false
 	for _, task := range taskList {
 		if task.Key() == "ssh-authorized-key" {
 			found = true
@@ -68,6 +69,9 @@ func TestBuildIncludesSSHAuthorizedKeyTaskWhenEnabled(t *testing.T) {
 		if task.Key() == "runtime-storage-audit" {
 			runtimeStorageAuditFound = true
 		}
+		if task.Key() == "host-facts" {
+			hostFactsFound = true
+		}
 	}
 	if !found {
 		t.Fatalf("expected ssh-authorized-key task to be present")
@@ -77,6 +81,9 @@ func TestBuildIncludesSSHAuthorizedKeyTaskWhenEnabled(t *testing.T) {
 	}
 	if !runtimeStorageAuditFound {
 		t.Fatalf("expected runtime-storage-audit task to be present")
+	}
+	if !hostFactsFound {
+		t.Fatalf("expected host-facts task to be present")
 	}
 }
 
